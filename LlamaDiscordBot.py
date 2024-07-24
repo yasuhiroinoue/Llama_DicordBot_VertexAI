@@ -2,7 +2,7 @@ import os
 import re
 import aiohttp
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 # from anthropic import AsyncAnthropicVertex
 from PIL import Image
@@ -40,13 +40,13 @@ client = openai.AsyncOpenAI(
     api_key=credentials.token,
 )
 LLM_MODEL = os.getenv("MODEL")
-MAX_TOKEN = 2048
+MAX_TOKEN = 1500
 
 # 
-# SYSTEM_MESSAGE = {
-#     "role": "system",
-#     "content": "You are a helpful assistant on Discord. Respond to users directly and concisely. Keep your messages brief, friendly, and easy to read."
-# }
+SYSTEM_MESSAGE = {
+    "role": "system",
+    "content": "Please respond with Markdown formatting. Line breaks are directly supported."
+}
 
 
 # Initialize Discord bot
@@ -54,8 +54,17 @@ bot = commands.Bot(command_prefix="!", intents=discord.Intents.default())
 
 message_history = {}
 
+
+@tasks.loop(minutes=55)
+async def refresh_credentials():
+    global credentials, client
+    credentials.refresh(auth_request)
+    client.api_key = credentials.token
+    print("Credentials refreshed")
+
 @bot.event
 async def on_ready():
+    refresh_credentials.start()
     print(f"Llama3.1 Bot Logged in as {bot.user}")
 
 @bot.event
@@ -162,14 +171,25 @@ async def process_text_message(message, cleaned_text):
     update_message_history(message.author.id, response_text, "assistant")
     await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
+def preprocess_message(content):
+    if content.startswith("assistant"):
+        return content[len("assistant"):]
+    return content
+
 async def generate_response_with_text(message_text):
     answer = await client.chat.completions.create(
         model=LLM_MODEL,
         max_tokens=MAX_TOKEN,
-        messages = message_text
+        messages = message_text,
+        temperature = 1.0,
+        top_p = 0.9,
     )
     
-    return answer.choices[0].message.content
+    response = answer.choices[0].message.content
+    # for debug
+    # print(response)
+    processed_response = preprocess_message(response)
+    return processed_response
 
 async def generate_response_with_image_and_text(image_data, text, mime_type):
     answer = await client.chat.completions.create(
@@ -207,12 +227,12 @@ def get_formatted_message_history(user_id):
     
     # Format each message in the history
     formatted_messages = []
-    # formatted_messages.append(SYSTEM_MESSAGE)
+    formatted_messages.append(SYSTEM_MESSAGE)
     for message in message_history[user_id]:
         role = message['role']
         content = " ".join(message['content'])
         formatted_messages.append({"role": role, "content": content})
-        
+    
     return formatted_messages
 
 def clean_discord_message(input_string):
@@ -262,13 +282,6 @@ async def split_and_send_messages(message_system, text, max_length):
         
         # Update start position for next iteration to continue after the last whitespace.
         start = end
-
-# This call should remain commented out as per instructions.
-# split_and_send_messages(some_message_system, "Your very long message here")
-
-# async def split_and_send_messages(message_system, text, max_length):
-#     for i in range(0, len(text), max_length):
-#         await message_system.channel.send(text[i:i+max_length])
 
 # Run the bot
 bot.run(DISCORD_BOT_TOKEN)
