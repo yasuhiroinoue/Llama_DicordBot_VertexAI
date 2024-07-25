@@ -19,6 +19,9 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GCP_REGION = os.getenv("GCP_REGION")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+TEMPERATURE = 0.5
+TOP_P = 1.0
+MAX_TOKEN = 2048
 vertexai.init(project=GCP_PROJECT_ID, location=GCP_REGION, )
 
 # Obtaining and Updating Google Cloud Credentials
@@ -40,13 +43,43 @@ client = openai.AsyncOpenAI(
     api_key=credentials.token,
 )
 LLM_MODEL = os.getenv("MODEL")
-MAX_TOKEN = 1500
 
 # 
 SYSTEM_MESSAGE = {
     "role": "system",
-    "content": "Please respond with Markdown formatting. Line breaks are directly supported."
+    "content":'''
+You are a helpful AI assistant, working on Discord servers.
+Please ensure that all responses are formatted in Markdown. Formatting Instructions for Markdown is as follows:
+
+- **Line Breaks:** Use double spaces at the end of a line for a line break. Do not use `\n` or `\n\n`.
+- **Headers:** Use `#` for headers to create titles and sections (e.g., `# Header 1`, `## Header 2`).
+- **Lists:** Use `*` or `-` for bullet points (e.g., `* Item 1`, `- Item 2`).
+- **Paragraphs:** Separate paragraphs with an empty line.
+- **Code:** For inline code, use backticks (`). For blocks of code, use triple backticks (```).
+
+Here is an example of a properly formatted response:
+
+"
+Hello!  
+It's nice to meet you. Is there something I can help you with, or would you like to chat?
+"
+
+When including code, like `#include <stdio.h>`, ensure it is enclosed in triple backticks (```).
+
+Example:
+```c
+#include <stdio.h>
+
+int main() {
+    printf("Hello, World!");
+    return 0;
 }
+```
+
+Remember, do not use `\n` or `\n\n`. Each line break must have two spaces at the end to create a proper line break in Markdown.
+'''
+}
+
 
 
 # Initialize Discord bot
@@ -177,33 +210,42 @@ def preprocess_message(content):
     return content
 
 async def generate_response_with_text(message_text):
-    answer = await client.chat.completions.create(
-        model=LLM_MODEL,
-        max_tokens=MAX_TOKEN,
-        messages = message_text,
-        temperature = 1.0,
-        top_p = 0.9,
-    )
-    
-    response = answer.choices[0].message.content
-    # for debug
-    # print(response)
-    processed_response = preprocess_message(response)
-    return processed_response
+    try:
+        answer = await client.chat.completions.create(
+            model=LLM_MODEL,
+            max_tokens=MAX_TOKEN,
+            messages=message_text,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+        )
+        
+        response = answer.choices[0].message.content
+        # for debug
+        # print(response)
+        processed_response = preprocess_message(response)
+        return processed_response
+    except Exception as e:
+        return f"Error: Failed to generate response due to {str(e)}"
+
 
 async def generate_response_with_image_and_text(image_data, text, mime_type):
-    answer = await client.chat.completions.create(
-        model=LLM_MODEL,
-        max_tokens=MAX_TOKEN,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": text if text else 'What is this a picture of?'},
-                {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": image_data}}
-            ]
-        }]
-    )
-    return answer.choices[0].message.content
+    # although Llama cannot handle multimodal data
+    try:
+        answer = await client.chat.completions.create(
+            model=LLM_MODEL,
+            max_tokens=MAX_TOKEN,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text if text else 'What is this a picture of?'},
+                    {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": image_data}}
+                ]
+            }]
+        )
+        return answer.choices[0].message.content
+    except Exception as e:
+        return f"Error: Failed to generate response due to {str(e)}"
+
 
 
 def update_message_history(user_id, text, message_type):
